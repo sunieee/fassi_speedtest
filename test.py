@@ -13,9 +13,11 @@ xq = np.random.random((nq, d)).astype('float32')
 xq[:, 0] += np.arange(nq) / 1000.                # 待检索的query向量
 
 
-quantizer = faiss.IndexFlatL2(d)
-nlist = 100
-index = faiss.IndexIVFFlat(quantizer, d, nlist, faiss.METRIC_L2)
+# quantizer = faiss.IndexFlatL2(d)
+# nlist = 100
+# index = faiss.IndexIVFFlat(quantizer, d, nlist, faiss.METRIC_L2)
+
+index = faiss.index_factory(d, 'HNSW64', faiss.METRIC_L2)
 
 gpu_index = faiss.index_cpu_to_all_gpus(index)
 t = time()

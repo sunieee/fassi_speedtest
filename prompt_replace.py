@@ -53,6 +53,8 @@ available_prompts = [
 ]
 
 
+rwidth = 4
+
 method_dic = {
     'default': '',
     'Flat': 'Flat',
@@ -60,7 +62,6 @@ method_dic = {
     'PQx': 'PQ16',
     'IVFxPQy': 'IVF100,PQ16',
     'LSH': 'LSH',
-    # 'HNSWx': 'HNSW64',
 }
 
 
@@ -78,6 +79,7 @@ def replace(tags, model, feature_matrix, thr=0.5, index=None):
     # print(feature_matrix.shape)
     # print(input_features.norm(2, 1))
     # print(feature_matrix.norm(2, 0))
+    t = time()
     if index:
         input_features = input_features.to(torch.float32)
         try:
@@ -85,11 +87,11 @@ def replace(tags, model, feature_matrix, thr=0.5, index=None):
         except:
             D, idxs = index.search(input_features.cpu(), 1)
         
-        return idxs, [D[i]>0 and 0 <=idxs[i]<feature_matrix.shape[1] for i in range(len(tags))]
+        return idxs, [D[i]>0 and 0 <=idxs[i]<feature_matrix.shape[1] for i in range(len(tags))], round(time() - t, rwidth)
     else:
         similarities = input_features @ feature_matrix
         idxs = similarities.argmax(dim=1)
-        return idxs, [similarities[i, idx]>thr for i, idx in enumerate(idxs)]
+        return idxs, [similarities[i, idx]>thr for i, idx in enumerate(idxs)], round(time() - t, rwidth)
 
 def get_random_prompt():
     ret = random.choice(available_prompts)
@@ -120,29 +122,36 @@ xb = xb.contiguous()
 xb = torch.tensor(xb, dtype=torch.float32)
 print(xb.dtype)
 
-statistic = pd.DataFrame(columns=['inference time', 'train time', 'add time', 'acc', '#modify', '#right'])
+statistic = pd.DataFrame(columns=['inference time', 'train time', 'add time', 'search time', 'accuracy', 
+                                '#modify', '#right'])
 standard_tag = {} 
 
-def main(method):
-    print('='*20, method, '='*20)
-    if method_dic[method]:
-        index = faiss.index_factory(dim, method_dic[method], faiss.METRIC_L2)
-        index = faiss.index_cpu_to_gpu(co, cuda_index, index)
+def main(method, **params):
+    name = method
+    if method == 'HNSW':
+        name = f"{method}{params['M']}-{params['efSearch']}-{params['efConstruction']}"
+    print('='*20, name, '='*20)
+
+    if method != 'default':
+        if method == 'HNSW':
+            index = faiss.IndexHNSWFlat(dim, params['M'])
+            index.hnsw.efConstruction = params['efConstruction']
+            index.hnsw.efSearch = params['efSearch']
+        else:
+            index = faiss.index_factory(dim, method_dic[method], faiss.METRIC_L2)
+            index = faiss.index_cpu_to_gpu(co, cuda_index, index)
         # index = faiss.index_cpu_to_all_gpus(index, co)
         t = time()
         if not index.is_trained:
             index.train(xb.cpu())
-        trian_time = round(time() - t, 5)
-        print('train time:', trian_time)
+        trian_time = round(time() - t, rwidth)
 
         # https://github.com/facebookresearch/faiss/issues/2074
         # 在多gpu环境下有bug，暂时使用单gpu
 
         t = time()
         index.add(xb.cpu())
-        print('all tags count:', index.ntotal)
-        add_time = round(time() - t, 5)
-        print('add time:', add_time)
+        add_time = round(time() - t, rwidth)
     else:
         index = None
         trian_time = 0
@@ -151,6 +160,8 @@ def main(method):
     df = pd.DataFrame(columns=['time', 'count', 'length', 'before', 'after'])
     predict_modify = 0
     predict_right = 0
+    search_time = 0
+    inference_time = 0
 
     for prompt in available_prompts:
         # prompt = 'Cattle, animal ear, medium chest, kimono, lakeside, summer, green, forest, {{{birds}}}, blue sky, white clouds, dynamic light, sunlight, highlight, masterpiece, a girl, bloom'
@@ -162,15 +173,12 @@ def main(method):
         feature_matrix = normed_tag_features
         replaced_prompt = []
         
-        t = time()
-        
-        idxs, modify = replace(new_tags, model, feature_matrix, index=index)
+        t = time()        
+        idxs, modify, st = replace(new_tags, model, feature_matrix, index=index)
+        search_time += st
+        inference_time += round(time() - t, rwidth)
         for i in range(len(new_tags)):
             if modify[i]:
-                prompt_list[i]
-                new_tags[i]
-                idxs[i]
-                tag_list[idxs[i]]
                 replaced_prompt.append(prompt_list[i].replace(new_tags[i], tag_list[idxs[i]]))
                 predict_modify += 1
 
@@ -181,34 +189,42 @@ def main(method):
             
             predict_right += standard_tag[new_tags[i]] == predict_tag
 
-
         new_prompt = ','.join(replaced_prompt)
         df.loc[len(df)] = {
-            'time': round(time() - t, 5),
+            'time': round(time() - t, rwidth),
             'count': len(prompt_list),
             'length': len(prompt),
             'before': prompt,
             'after': new_prompt
         }
-
-    inference_time = round(df['time'].sum(), 5)
-    print('inference time', inference_time)
-    print('count', df['count'].sum())
-    df.to_csv(f'output/{method}.csv')
-
-    statistic.loc[method] = {
-        'acc': round(predict_right / 703, 5),
+    
+    df.to_csv(f'output/{name}.csv')
+    statistic.loc[name] = {
+        'accuracy': round(predict_right / 703, rwidth),
         'inference time': inference_time, 
-        'train time': trian_time, 
+        'search time': search_time,
+        'train time': trian_time,
         'add time': add_time,
         '#modify': predict_modify,
         '#right': predict_right,
     }
+    for k, v in statistic.loc[name].items():
+        print(k + ':', v)
 
 if __name__ == '__main__':
     try:
         for method in method_dic:
             main(method)
+        # params = {
+        #     'M': 32,
+        #     'efSearch': 100,  # number of entry points (neighbors) we use on each layer
+        #     'efConstruction': 100, # number of entry points used on each layer during construction
+        # }
+        for M in [16, 32, 64]:
+            for efSearch in [50, 100]:
+                for efConstruction in [50, 100]:
+                    main('HNSW', M=M, efSearch=efSearch, efConstruction = efConstruction)
+
     finally:
         statistic.to_csv('statistic.csv')
 
