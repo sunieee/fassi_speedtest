@@ -60,7 +60,7 @@ method_dic = {
     'PQx': 'PQ16',
     'IVFxPQy': 'IVF100,PQ16',
     'LSH': 'LSH',
-    'HNSWx': 'HNSW64',
+    # 'HNSWx': 'HNSW64',
 }
 
 
@@ -84,7 +84,8 @@ def replace(tags, model, feature_matrix, thr=0.5, index=None):
             D, idxs = index.search(input_features, 1)
         except:
             D, idxs = index.search(input_features.cpu(), 1)
-        return idxs, [D[i]>thr*100 for i in range(len(tags))]
+        
+        return idxs, [D[i]>0 and 0 <=idxs[i]<feature_matrix.shape[1] for i in range(len(tags))]
     else:
         similarities = input_features @ feature_matrix
         idxs = similarities.argmax(dim=1)
@@ -119,7 +120,8 @@ xb = xb.contiguous()
 xb = torch.tensor(xb, dtype=torch.float32)
 print(xb.dtype)
 
-statistic = pd.DataFrame(columns=['inference time', 'train time', 'add time'])
+statistic = pd.DataFrame(columns=['inference time', 'train time', 'add time', 'acc', '#modify', '#right'])
+standard_tag = {} 
 
 def main(method):
     print('='*20, method, '='*20)
@@ -147,6 +149,8 @@ def main(method):
         add_time = 0
 
     df = pd.DataFrame(columns=['time', 'count', 'length', 'before', 'after'])
+    predict_modify = 0
+    predict_right = 0
 
     for prompt in available_prompts:
         # prompt = 'Cattle, animal ear, medium chest, kimono, lakeside, summer, green, forest, {{{birds}}}, blue sky, white clouds, dynamic light, sunlight, highlight, masterpiece, a girl, bloom'
@@ -159,12 +163,25 @@ def main(method):
         replaced_prompt = []
         
         t = time()
-
+        
         idxs, modify = replace(new_tags, model, feature_matrix, index=index)
         for i in range(len(new_tags)):
             if modify[i]:
+                prompt_list[i]
+                new_tags[i]
+                idxs[i]
+                tag_list[idxs[i]]
                 replaced_prompt.append(prompt_list[i].replace(new_tags[i], tag_list[idxs[i]]))
-        
+                predict_modify += 1
+
+            # 测试acc
+            predict_tag = tag_list[idxs[i]] if modify[i] else None
+            if method == 'default':
+                standard_tag[new_tags[i]] = predict_tag
+            
+            predict_right += standard_tag[new_tags[i]] == predict_tag
+
+
         new_prompt = ','.join(replaced_prompt)
         df.loc[len(df)] = {
             'time': round(time() - t, 5),
@@ -180,9 +197,12 @@ def main(method):
     df.to_csv(f'output/{method}.csv')
 
     statistic.loc[method] = {
+        'acc': round(predict_right / 703, 5),
         'inference time': inference_time, 
         'train time': trian_time, 
-        'add time': add_time
+        'add time': add_time,
+        '#modify': predict_modify,
+        '#right': predict_right,
     }
 
 if __name__ == '__main__':
