@@ -64,29 +64,31 @@ method_dic = {
 }
 
 
-def replace(tag, model, feature_matrix, thr=0.5, index=None):
-    # input_features = []
-    # for tag in tags:
-    tokenized_input = clip.tokenize(tag).to(device)
-    input_feature = model.encode_text(tokenized_input)
-    # input_features.append(model.encode_text(tokenized_input))
-    # input_features = torch.cat(input_features, dim=0)
-    input_feature /= input_feature.norm(2,1)
-    # input_features = F.normalize(input_features, p=2, dim=1)
+def replace(tags, model, feature_matrix, thr=0.5, index=None):
+    input_features = []
+    for tag in tags:
+        tokenized_input = clip.tokenize(tag).to(device)
+        input_features.append(model.encode_text(tokenized_input))
 
+    input_features = torch.cat(input_features, dim=0)
+    # print(input_features.shape)
+    # input_features /= input_features.norm(2,1)
+    input_features = F.normalize(input_features, p=2, dim=1)
+    # print(input_features.shape)
+    # print(feature_matrix.shape)
+    # print(input_features.norm(2, 1))
+    # print(feature_matrix.norm(2, 0))
     if index:
-        input_feature = input_feature.to(torch.float32)
+        input_features = input_features.to(torch.float32)
         try:
-            D, idx = index.search(input_feature, 1)
+            D, idxs = index.search(input_features, 1)
         except:
-            D, idx = index.search(input_feature.cpu(), 1)
-        # return idxs, [D[i]>thr*100 for i in range(len(tags))]
-        return idx, D>thr*100
+            D, idxs = index.search(input_features.cpu(), 1)
+        return idxs, [D[i]>thr*100 for i in range(len(tags))]
     else:
-        similarities = input_feature @ feature_matrix
-        idx = similarities.argmax(dim=1)
-        return idx, similarities[0, idx]>thr
-        # return idxs, [similarities[i, idx]>thr for i, idx in enumerate(idxs)]
+        similarities = input_features @ feature_matrix
+        idxs = similarities.argmax(dim=1)
+        return idxs, [similarities[i, idx]>thr for i, idx in enumerate(idxs)]
 
 def get_random_prompt():
     ret = random.choice(available_prompts)
@@ -119,8 +121,7 @@ print(xb.dtype)
 
 statistic = pd.DataFrame(columns=['inference time', 'train time', 'add time'])
 
-
-for method in method_dic:
+def main(method):
     print('='*20, method, '='*20)
     if method_dic[method]:
         index = faiss.index_factory(dim, method_dic[method], faiss.METRIC_L2)
@@ -151,7 +152,7 @@ for method in method_dic:
         # prompt = 'Cattle, animal ear, medium chest, kimono, lakeside, summer, green, forest, {{{birds}}}, blue sky, white clouds, dynamic light, sunlight, highlight, masterpiece, a girl, bloom'
         new_tags = []
         prompt_list = prompt.split(',')
-        for i, tag in enumerate(prompt_list):
+        for idx, tag in enumerate(prompt_list):
             tag = tag.strip('(').strip(')').strip('[').strip(']').strip('{').strip('}').split(':')[0].strip()
             new_tags.append(tag)
         feature_matrix = normed_tag_features
@@ -159,11 +160,10 @@ for method in method_dic:
         
         t = time()
 
-        for i, tag in enumerate(new_tags):
-            idx, modify = replace(tag, model, feature_matrix, index=index)
-            if modify:
-                print(tag_list[idx])
-                replaced_prompt.append(prompt_list[i].replace(tag, tag_list[idx]))
+        idxs, modify = replace(new_tags, model, feature_matrix, index=index)
+        for i in range(len(new_tags)):
+            if modify[i]:
+                replaced_prompt.append(prompt_list[i].replace(new_tags[i], tag_list[idxs[i]]))
         
         new_prompt = ','.join(replaced_prompt)
         df.loc[len(df)] = {
@@ -185,5 +185,10 @@ for method in method_dic:
         'add time': add_time
     }
 
-statistic.to_csv(statistic)
+if __name__ == '__main__':
+    try:
+        for method in method_dic:
+            main(method)
+    finally:
+        statistic.to_csv('statistic.csv')
 
