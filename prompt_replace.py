@@ -68,14 +68,12 @@ method_dic = {
 }
 
 def replace(tags, model, feature_matrix, thr=0.5, index=None):
-    input_features = []
     t = time()
-    for tag in tags:
-        tokenized_input = clip.tokenize(tag).to(device)
-        input_features.append(model.encode_text(tokenized_input))
+    tokenized_input = torch.cat([clip.tokenize(tag) for tag in tags]).to(device)
+    input_features = model.encode_text(tokenized_input)
     embed_time = rr(time() - t)
 
-    input_features = torch.cat(input_features, dim=0)
+    # input_features = torch.cat(input_features, dim=0)
     # print(input_features.shape)
     # input_features /= input_features.norm(2,1)
     input_features = F.normalize(input_features, p=2, dim=1)
@@ -231,6 +229,9 @@ if __name__ == '__main__':
         #     for efSearch in [50, 100]:
         #         for efConstruction in [50, 100]:
         #             main('HNSW', M=M, efSearch=efSearch, efConstruction = efConstruction)
+        
+        for M in [16, 32, 64]:
+            main('HNSW', M=M, efSearch=100, efConstruction = 100)
 
     finally:
         statistic.to_csv('statistic.csv')
